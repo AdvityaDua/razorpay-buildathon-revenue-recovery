@@ -53,6 +53,7 @@ const CAUSE_COLORS: Record<string, string> = {
 
 export default function MetricsPage() {
   const { data, isLoading, error } = useMetrics();
+  const { data: recordsData } = useRecords();
 
   if (isLoading) {
     return (
@@ -109,7 +110,6 @@ export default function MetricsPage() {
     })
   );
 
-  const { data: recordsData } = useRecords();
   const records = recordsData?.records || [];
   
   // Risk Heatmap computation
