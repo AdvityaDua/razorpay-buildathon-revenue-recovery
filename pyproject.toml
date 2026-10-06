@@ -20,9 +20,4 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-include = [
-    "api*",
-    "agent*",
-    "data*",
-    "eval*",
-]
+include = ["backend*"]
