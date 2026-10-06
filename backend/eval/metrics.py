@@ -1,7 +1,7 @@
 """
-Metrics computation — all PRD §10.2 metrics.
+Metrics computation — all evaluation metrics.
 
-Every metric listed is mandatory (eval-harness-conventions skill):
+Computed on the full batch, never on a cherry-picked subset:
 - Diagnosis precision/recall (per root-cause class)
 - Self-consistency rate
 - Confidence calibration bins
@@ -10,9 +10,6 @@ Every metric listed is mandatory (eval-harness-conventions skill):
 - False diagnoses by class
 - % correctly stopped
 - Policy override count
-
-All computed on the full batch — never on a cherry-picked subset
-(AGENTS.md non-negotiable rule 4).
 """
 
 from __future__ import annotations
@@ -29,17 +26,7 @@ def compute_metrics(
     records: list[FailureRecord],
     baseline_results: list[dict],
 ) -> dict[str, Any]:
-    """
-    Compute all PRD §10.2 metrics on the full batch.
-
-    Args:
-        audit_entries: Agent audit trail entries (one per record)
-        records: Full failure records with ground truth
-        baseline_results: Baseline results (one per record)
-
-    Returns:
-        Complete metrics report dict
-    """
+    """Compute all evaluation metrics on the full batch."""
     n_total = len(records)
     assert n_total == len(audit_entries), (
         f"Audit entries ({len(audit_entries)}) must match records ({n_total})"
@@ -48,44 +35,25 @@ def compute_metrics(
         f"Baseline results ({len(baseline_results)}) must match records ({n_total})"
     )
 
-    # Build lookup for easy access
-    record_by_id = {r.mandate_id: r for r in records}
-
-    # ── 1. Diagnosis precision/recall per class ──
     precision_recall = _compute_precision_recall(audit_entries, records)
-
-    # ── 2. Self-consistency rate ──
     self_consistency = _compute_self_consistency(audit_entries)
-
-    # ── 3. Confidence calibration ──
     calibration = _compute_confidence_calibration(audit_entries, records)
 
-    # ── 4. ₹ recovered (system) ──
     system_recovered = sum(e.amount_recovered for e in audit_entries)
-
-    # ── 5. ₹ recovered (baseline) ──
     baseline_recovered = sum(b["amount_recovered"] for b in baseline_results)
 
-    # ── 6. Unnecessary retries avoided ──
     unnecessary_retries_avoided = _compute_unnecessary_retries_avoided(
         audit_entries, records, baseline_results
     )
-
-    # ── 7. False diagnoses by class ──
     false_diagnoses = _compute_false_diagnoses(audit_entries, records)
-
-    # ── 8. % correctly stopped ──
     correctly_stopped_pct = _compute_correctly_stopped(audit_entries, records)
 
-    # ── 9. Policy override count ──
     override_log = get_override_log()
     policy_override_count = len(override_log)
 
-    # ── 10. Additional useful stats ──
     n_errors = sum(1 for e in audit_entries if e.diagnosis_error is not None)
     n_held = sum(1 for e in audit_entries if e.was_held)
 
-    # Recovery rate comparison
     total_recoverable = sum(
         r.amount_recoverable_if_acted_correctly
         for r in records
@@ -120,7 +88,7 @@ def _compute_precision_recall(
     entries: list[AuditTrailEntry],
     records: list[FailureRecord],
 ) -> dict[str, dict[str, float]]:
-    """Compute precision and recall per root-cause class."""
+    """Precision and recall per root-cause class."""
     record_by_id = {r.mandate_id: r for r in records}
 
     classes = [
@@ -128,7 +96,6 @@ def _compute_precision_recall(
         "customer_cancelled", "genuine_decline", "ambiguous",
     ]
 
-    # Count TP, FP, FN per class
     tp: dict[str, int] = defaultdict(int)
     fp: dict[str, int] = defaultdict(int)
     fn: dict[str, int] = defaultdict(int)
@@ -165,7 +132,6 @@ def _compute_precision_recall(
             "false_negatives": fn[cls],
         }
 
-    # Overall accuracy
     total_correct = sum(tp.values())
     total = sum(1 for e in entries if e.diagnosis is not None)
     result["overall"] = {
@@ -178,10 +144,7 @@ def _compute_precision_recall(
 
 
 def _compute_self_consistency(entries: list[AuditTrailEntry]) -> dict[str, Any]:
-    """
-    Compute self-consistency rate — % of records where root_cause
-    is a valid member of 'plausible' causes (PRD §10.2).
-    """
+    """% of records where root_cause is a valid member of plausible causes."""
     consistent = 0
     inconsistent = 0
     evaluated = 0
@@ -217,11 +180,7 @@ def _compute_confidence_calibration(
     entries: list[AuditTrailEntry],
     records: list[FailureRecord],
 ) -> list[dict[str, Any]]:
-    """
-    Compute confidence calibration — binned confidence vs actual accuracy.
-
-    Bins: [0.0-0.2), [0.2-0.4), [0.4-0.6), [0.6-0.8), [0.8-1.0]
-    """
+    """Binned confidence vs actual accuracy (reliability plot)."""
     record_by_id = {r.mandate_id: r for r in records}
 
     bins = [(0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.01)]
@@ -266,10 +225,7 @@ def _compute_unnecessary_retries_avoided(
     records: list[FailureRecord],
     baseline_results: list[dict],
 ) -> dict[str, int]:
-    """
-    Count customer_cancelled / hard-stop cases where system correctly
-    took no action vs. baseline retrying anyway.
-    """
+    """Count hard-stop cases where system correctly stopped vs baseline retrying."""
     record_by_id = {r.mandate_id: r for r in records}
     baseline_by_id = {b["mandate_id"]: b for b in baseline_results}
 
@@ -282,15 +238,11 @@ def _compute_unnecessary_retries_avoided(
         if record is None or baseline is None:
             continue
 
-        # Hard-stop cases: customer_cancelled, mandate revoked/paused
         is_hard_stop = record.true_root_cause in ("customer_cancelled",) or not record.recoverable
 
         if is_hard_stop:
-            # Did baseline retry anyway?
             if "retry" in baseline.get("action_taken", ""):
                 baseline_unnecessary += 1
-
-                # Did our system correctly stop?
                 if entry.allowed_action and entry.allowed_action.action in ("stop", "hold_for_review"):
                     avoided += 1
 
@@ -332,11 +284,7 @@ def _compute_correctly_stopped(
     entries: list[AuditTrailEntry],
     records: list[FailureRecord],
 ) -> dict[str, Any]:
-    """
-    Of all true hard-stop cases, % where system correctly produced STOP.
-
-    True hard-stop cases: customer_cancelled, plus any non-recoverable case.
-    """
+    """Of all true hard-stop cases, % where system correctly produced STOP."""
     record_by_id = {r.mandate_id: r for r in records}
 
     total_hard_stop = 0
@@ -347,7 +295,6 @@ def _compute_correctly_stopped(
         if record is None:
             continue
 
-        # True hard-stop: customer_cancelled or non-recoverable
         is_hard_stop = (
             record.true_root_cause == "customer_cancelled"
             or not record.recoverable

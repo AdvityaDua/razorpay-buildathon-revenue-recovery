@@ -1,9 +1,8 @@
 """
-LLM client — ChatOpenAI wrapper pointed at vLLM endpoint.
+LLM client — ChatOpenAI wrapper pointed at NVIDIA Nemotron endpoint.
 
 Reads LLM_BASE_URL, LLM_MODEL_NAME, LLM_API_KEY from .env.
-Native tool-calling enabled (vLLM launched with
---enable-auto-tool-choice --tool-call-parser llama3_json per PRD §12.2).
+Native tool-calling enabled.
 """
 
 from __future__ import annotations
@@ -19,13 +18,13 @@ load_dotenv()
 
 def get_llm(temperature: float = 0.1) -> ChatOpenAI:
     """
-    Get a ChatOpenAI instance pointed at the vLLM endpoint.
+    Get a ChatOpenAI instance pointed at the NVIDIA Nemotron endpoint.
 
     Low temperature by default for reproducible eval runs
     (eval-harness-conventions skill: determinism for reproducibility).
     """
-    base_url = os.getenv("LLM_BASE_URL", "http://localhost:8000/v1")
-    model_name = os.getenv("LLM_MODEL_NAME", "llama70b")
+    base_url = os.getenv("LLM_BASE_URL", "https://integrate.api.nvidia.com/v1")
+    model_name = os.getenv("LLM_MODEL_NAME", "nvidia/nemotron-3-ultra-550b-a55b")
     api_key = os.getenv("LLM_API_KEY", "not-needed")
 
     return ChatOpenAI(

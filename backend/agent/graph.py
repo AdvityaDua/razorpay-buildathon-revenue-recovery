@@ -1,22 +1,9 @@
 """
-LangGraph graph definition — full agent pipeline.
+LangGraph pipeline — full agent orchestration.
 
-Graph structure (PRD §8.2):
-    failure_event
-         ↓
-    Diagnosis Node — LLM call, structured output
-         ↓
-    Confidence Gate — pure code: confidence < 0.5 or ambiguous → HOLD
-         ↓                                                        ↓
-    Policy Gate    — pure code: checks hard-stop conditions    HOLD (logged)
-         ↓
-    Recovery Policy Agent — LLM proposes action + timing
-         ↓
-    validate_action() — pure code, final hard gate
-         ↓
-    Simulated Execution — resolves outcome against ground truth
-         ↓
-    Audit Log — writes full trail entry
+Pipeline:
+    failure_event → Diagnosis → Confidence Gate → Policy Gate
+    → Recovery Agent → validate_action() → Simulated Execution → Audit Log
 """
 
 from __future__ import annotations
@@ -42,12 +29,8 @@ from backend.data.schema import (
 logger = logging.getLogger(__name__)
 
 
-# ──────────────────────────────────────────────
-# Graph State
-# ──────────────────────────────────────────────
-
 class GraphState(TypedDict, total=False):
-    """State passed through the LangGraph nodes."""
+    """State passed through the pipeline nodes."""
     record: FailureRecordInput
     ground_truth: FailureRecord | None
     diagnosis: Diagnosis | None
@@ -62,14 +45,9 @@ class GraphState(TypedDict, total=False):
     audit_entry: AuditTrailEntry | None
 
 
-# ──────────────────────────────────────────────
-# Node functions
-# ──────────────────────────────────────────────
-
 async def diagnosis_node(state: GraphState) -> GraphState:
     """Stage 1: Run the Diagnosis Agent."""
     record = state["record"]
-
     try:
         diagnosis = await run_diagnosis(record)
         state["diagnosis"] = diagnosis
@@ -82,17 +60,11 @@ async def diagnosis_node(state: GraphState) -> GraphState:
         logger.error(f"Diagnosis failed for {record.mandate_id}: {e}")
         state["diagnosis"] = None
         state["diagnosis_error"] = str(e)
-
     return state
 
 
 async def confidence_gate_node(state: GraphState) -> GraphState:
-    """
-    Pure-code gate: route low-confidence / ambiguous diagnoses to HOLD.
-
-    This runs before any recovery LLM call to save compute on cases
-    where the policy layer would block action anyway.
-    """
+    """Route low-confidence / ambiguous / hard-stop cases to HOLD before invoking LLM."""
     diagnosis = state.get("diagnosis")
 
     if diagnosis is None:
@@ -107,7 +79,6 @@ async def confidence_gate_node(state: GraphState) -> GraphState:
         state["was_held"] = True
         state["hold_reason"] = reason
 
-        # For hard-stop cases, create an appropriate allowed_action
         if "Hard STOP" in (reason or ""):
             state["allowed_action"] = AllowedAction(
                 action="stop",
@@ -130,9 +101,9 @@ async def confidence_gate_node(state: GraphState) -> GraphState:
 
 
 async def recovery_agent_node(state: GraphState) -> GraphState:
-    """Stage 2: Run the Recovery Policy Agent (LLM proposes action)."""
+    """Stage 2: Run the Recovery Agent (LLM proposes action)."""
     if state.get("was_held"):
-        return state  # Skip — already routed to HOLD
+        return state
 
     record = state["record"]
     diagnosis = state["diagnosis"]
@@ -144,19 +115,13 @@ async def recovery_agent_node(state: GraphState) -> GraphState:
         f"Recovery proposal: {proposed.action} for {record.mandate_id} "
         f"(diagnosis={diagnosis.root_cause})"
     )
-
     return state
 
 
 async def validate_action_node(state: GraphState) -> GraphState:
-    """
-    Pure-code final gate: validate_action() — can override LLM proposal.
-
-    This is THE critical security boundary (policy-layer-guard skill).
-    The proposed_action NEVER flows directly into execution.
-    """
+    """Final gate: validate_action() can override the LLM's proposal."""
     if state.get("was_held"):
-        return state  # Already handled
+        return state
 
     diagnosis = state["diagnosis"]
     proposed = state["proposed_action"]
@@ -172,21 +137,13 @@ async def validate_action_node(state: GraphState) -> GraphState:
             f"(rule: {allowed.override_rule})"
         )
     else:
-        logger.info(
-            f"Policy approved: {allowed.action} for {record.mandate_id}"
-        )
+        logger.info(f"Policy approved: {allowed.action} for {record.mandate_id}")
 
     return state
 
 
 async def simulated_execution_node(state: GraphState) -> GraphState:
-    """
-    Simulate action execution — resolve outcome against ground truth.
-
-    No real payments/messages sent (PRD §4.1). Outcome determined by:
-    - Whether the action matches the ground truth's true_recovery_action
-    - Whether the case is actually recoverable
-    """
+    """Simulate action execution — resolve outcome against ground truth."""
     allowed = state.get("allowed_action")
     ground_truth = state.get("ground_truth")
 
@@ -196,12 +153,10 @@ async def simulated_execution_node(state: GraphState) -> GraphState:
         return state
 
     if ground_truth is None:
-        # No ground truth available (e.g., live/non-eval mode)
         state["simulated_outcome"] = "simulated_success"
         state["amount_recovered"] = 0.0
         return state
 
-    # Determine outcome
     if allowed.action == "stop":
         if not ground_truth.recoverable:
             state["simulated_outcome"] = "correctly_stopped"
@@ -215,18 +170,14 @@ async def simulated_execution_node(state: GraphState) -> GraphState:
         state["amount_recovered"] = 0.0
 
     elif ground_truth.recoverable:
-        # Check if the action is correct
         if allowed.action == ground_truth.true_recovery_action:
             state["simulated_outcome"] = "recovered"
             state["amount_recovered"] = ground_truth.amount_recoverable_if_acted_correctly
         else:
             # Wrong action but case was recoverable — partial credit
-            # (e.g., sent reminder instead of retry — less effective but not zero)
             state["simulated_outcome"] = "partial_recovery"
             state["amount_recovered"] = ground_truth.amount_recoverable_if_acted_correctly * 0.3
-
     else:
-        # Case not recoverable but we tried anyway
         state["simulated_outcome"] = "unnecessary_action"
         state["amount_recovered"] = 0.0
 
@@ -234,12 +185,11 @@ async def simulated_execution_node(state: GraphState) -> GraphState:
         f"Simulated execution for {state['record'].mandate_id}: "
         f"{state['simulated_outcome']} (₹{state['amount_recovered']:,.2f})"
     )
-
     return state
 
 
 async def audit_log_node(state: GraphState) -> GraphState:
-    """Write full audit trail entry per record (PRD non-negotiable rule 5)."""
+    """Write full audit trail entry for every record."""
     record = state["record"]
 
     entry = AuditTrailEntry(
@@ -266,13 +216,8 @@ async def audit_log_node(state: GraphState) -> GraphState:
         f"action={entry.allowed_action.action if entry.allowed_action else 'none'} | "
         f"outcome={entry.simulated_outcome}"
     )
-
     return state
 
-
-# ──────────────────────────────────────────────
-# Graph construction
-# ──────────────────────────────────────────────
 
 async def run_agent_pipeline(
     record: FailureRecordInput,
@@ -281,17 +226,8 @@ async def run_agent_pipeline(
     """
     Run the full agent pipeline on a single failure record.
 
-    Uses sequential execution (no LangGraph StateGraph needed for MVP —
-    the node structure is the same, just called sequentially).
-    This keeps the dependency graph simple while preserving the
-    node-level audit trail structure from PRD §8.2.
-
-    Args:
-        record: Failure record (ground truth stripped)
-        ground_truth: Full record with ground truth (for eval only)
-
-    Returns:
-        Final graph state with audit trail entry
+    Sequential execution — same node structure as the LangGraph diagram,
+    just called directly for simplicity at this scale.
     """
     state: GraphState = {
         "record": record,
@@ -308,7 +244,6 @@ async def run_agent_pipeline(
         "audit_entry": None,
     }
 
-    # Execute nodes sequentially per PRD §8.2 graph structure
     state = await diagnosis_node(state)
     state = await confidence_gate_node(state)
     state = await recovery_agent_node(state)

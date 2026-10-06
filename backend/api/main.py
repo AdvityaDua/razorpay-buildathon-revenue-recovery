@@ -1,13 +1,10 @@
 """
-FastAPI application — serves the dashboard frontend.
+FastAPI application — serves the RecoverIQ dashboard frontend.
 
 Routes:
 - GET /api/records — batch results (failure records + diagnosis + action + outcome)
 - GET /api/metrics — computed metrics report (reads from eval output)
 - POST /api/batch/run — trigger a batch run
-
-Frontend Metrics page reads from saved eval report artifact, not
-recomputing live (eval-harness-conventions rule 5).
 """
 
 from __future__ import annotations
@@ -27,15 +24,15 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="AI Revenue Recovery Orchestrator",
-    description="Razorpay Buildathon — Track 03: AI Revenue Recovery",
+    title="RecoverIQ",
+    description="AI Revenue Recovery Orchestrator",
     version="0.1.0",
 )
 
 # CORS for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # single demo merchant, no auth (PRD §4.2)
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -63,8 +60,6 @@ async def health():
 async def get_records():
     """
     Get batch results — failure records with diagnosis, action, outcome.
-
-    Reads from the latest eval report artifact.
     """
     report = _load_latest_report()
     if report is None:
@@ -83,8 +78,6 @@ async def get_records():
 async def get_metrics():
     """
     Get computed metrics — reads from saved eval report.
-
-    Does NOT recompute metrics live (eval-harness-conventions rule 5).
     """
     report = _load_latest_report()
     if report is None:
@@ -119,7 +112,6 @@ async def get_baseline():
 async def trigger_batch_run(background_tasks: BackgroundTasks):
     """
     Trigger a batch evaluation run.
-
     Runs in background so the API doesn't block.
     """
     from backend.eval.run_batch import run_batch
@@ -137,6 +129,21 @@ async def trigger_batch_run(background_tasks: BackgroundTasks):
         "message": "Batch evaluation started in background. Check /api/metrics for results.",
     }
 
+
+from backend.data.schema import FailureRecordInput
+from backend.agent.graph import run_agent_pipeline
+
+@app.post("/api/simulate")
+async def simulate_record(record: FailureRecordInput):
+    """Run the pipeline on a single custom record for live simulation."""
+    try:
+        state = await run_agent_pipeline(record)
+        if state.get("audit_entry"):
+            return state["audit_entry"].model_dump(mode="json")
+        return {"error": state.get("diagnosis_error", "Unknown error")}
+    except Exception as e:
+        logger.error(f"Live simulation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn

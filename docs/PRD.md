@@ -1,6 +1,6 @@
 # PRD — AI Recurring Revenue Recovery Orchestrator
 
-**Razorpay Buildathon — Track 03: AI Revenue Recovery**
+**payment gateway Buildathon — Track 03: AI Revenue Recovery**
 **Timeline:** 5 build days (Aug 28 – Sep 5, 2026) · **Submission-ready target:** Sep 5
 **Status:** Locked scope. Build against this document — do not silently expand scope mid-build.
 
@@ -14,7 +14,7 @@ An AI agent that sits between a failed recurring payment (subscription/mandate a
 
 ## 2. Problem statement (final, approved)
 
-Every subscription or recurring-payment business on Razorpay relies on auto-debit mandates succeeding every billing cycle. When a payment fails, the failure code alone rarely explains why — it could be insufficient funds, an expired mandate, a missed step-up authentication, a bank-side decline, or the customer deliberately cancelling the mandate. Treating every failure the same way (retry N times on a fixed schedule) is inefficient, and in the cancelled-mandate case, actively disrespects customer intent and RBI/network compliance rules around mandate revocation and the mandatory 24-hour pre-debit notice window.
+Every subscription or recurring-payment business on payment gateway relies on auto-debit mandates succeeding every billing cycle. When a payment fails, the failure code alone rarely explains why — it could be insufficient funds, an expired mandate, a missed step-up authentication, a bank-side decline, or the customer deliberately cancelling the mandate. Treating every failure the same way (retry N times on a fixed schedule) is inefficient, and in the cancelled-mandate case, actively disrespects customer intent and RBI/network compliance rules around mandate revocation and the mandatory 24-hour pre-debit notice window.
 
 Merchants often lack a sufficiently context-aware way to understand why a payment failed, whether it's recoverable, what intervention has the best expected return, and when to stop. This produces silent, compounding revenue loss.
 
@@ -22,12 +22,12 @@ Merchants often lack a sufficiently context-aware way to understand why a paymen
 
 Two-stage agent:
 
-1. **Diagnosis Agent** — reasons over failure code, timing (vs. pre-debit alert), mandate status/history, and customer payment behavior to produce a structured root-cause diagnosis with a confidence score and cited evidence. Must degrade gracefully when structured error fields are null (confirmed to happen in real Razorpay payloads).
+1. **Diagnosis Agent** — reasons over failure code, timing (vs. pre-debit alert), mandate status/history, and customer payment behavior to produce a structured root-cause diagnosis with a confidence score and cited evidence. Must degrade gracefully when structured error fields are null (confirmed to happen in real payment gateway payloads).
 2. **Recovery Policy Agent** — takes the diagnosis and selects the action with the best expected recovery value (`Expected Revenue Recovered − Cost of Intervention − Customer Friction Cost − Risk/Compliance Penalty`), bounded by a **deterministic policy layer** that hard-gates STOP conditions (e.g., customer-cancelled mandate) — the LLM cannot override these regardless of what it outputs.
 
 Every decision is logged to a full audit trail. The system is evaluated on a synthetic batch (300–500 records) with known ground truth against a naive retry baseline, reporting precision/recall, ₹ recovered, false diagnoses, unnecessary retries avoided, and % correctly stopped.
 
-**Positioning:** this is an intelligence layer on top of Razorpay's existing infrastructure (webhooks, subscriptions API, native retry mechanism), not a replacement for it.
+**Positioning:** this is an intelligence layer on top of payment gateway's existing infrastructure (webhooks, subscriptions API, native retry mechanism), not a replacement for it.
 
 ---
 
@@ -44,7 +44,7 @@ Every decision is logged to a full audit trail. The system is evaluated on a syn
 | Simulated action execution | No real payments/messages sent — simulated outcome resolution against ground truth |
 | Audit trail | Structured log per record: evidence → diagnosis → confidence → policy check → action → outcome |
 | Batch evaluation harness | Runs full batch, computes all metrics vs. baseline, outputs a report |
-| Baseline comparator | Naive fixed-schedule retry logic (mirrors Razorpay's documented default behavior) |
+| Baseline comparator | Naive fixed-schedule retry logic (mirrors payment gateway's documented default behavior) |
 | Merchant dashboard (frontend) | Recovery queue view + aggregate metrics view (Section 8) |
 | Backend API | FastAPI serving dashboard + triggering batch runs |
 
@@ -54,7 +54,7 @@ Every decision is logged to a full audit trail. The system is evaluated on a syn
 - Real WhatsApp/SMS sending (simulate the notification content + a mocked "delivered" state instead)
 - Low-confidence structured follow-up flow (human-review queue / customer prompt) — **mention as designed-for extension point in architecture, do not build the actual flow**
 - Celery / distributed task queue — not needed at this scale; mention as a scaling note only
-- Real Razorpay live-mode integration — test-mode webhook shapes only, used to validate schema realism
+- Real payment gateway live-mode integration — test-mode webhook shapes only, used to validate schema realism
 - RAG over historical cases (Qdrant is available but not required — stretch only if time remains after MVP)
 - Authentication/multi-tenant merchant accounts — single demo merchant only
 
@@ -69,7 +69,7 @@ Every decision is logged to a full audit trail. The system is evaluated on a syn
 
 ## 5. Users / personas
 
-- **Primary demo persona:** an ops/finance user at a subscription-based merchant (e.g., SaaS or OTT business) using Razorpay Subscriptions. This is who the dashboard is designed for.
+- **Primary demo persona:** an ops/finance user at a subscription-based merchant (e.g., SaaS or OTT business) using payment gateway Subscriptions. This is who the dashboard is designed for.
 - **Panel/evaluator (real audience):** technical reviewers assessing agentic reasoning quality, honest evaluation methodology, and compliance-aware system design — not the end merchant. Every metric and audit-trail view should be legible to this audience.
 
 ---
@@ -123,7 +123,7 @@ amount_recoverable_if_acted_correctly: number
 ### 6.3 Synthetic data generation approach
 
 - Anchor distribution loosely on real reported Indian autopay/e-mandate failure-reason breakdowns (cite in dataset README).
-- Deliberately null out error fields in ~30% of records to mirror confirmed real-world Razorpay webhook behavior.
+- Deliberately null out error fields in ~30% of records to mirror confirmed real-world payment gateway webhook behavior.
 - Inject genuinely ambiguous cases (conflicting or absent secondary signals) at ~20-30% of the batch — this is what makes the eval meaningful, not decorative.
 - Ground truth (`true_root_cause`, `recoverable`, `amount_recoverable_if_acted_correctly`) generated alongside each record at creation time, never derived from the agent's own output.
 
@@ -139,7 +139,7 @@ This layer sits **between** the Recovery Policy Agent's LLM output and actual ex
 | `mandate_status == paused` | Hard STOP for this cycle. May re-check next cycle. | **No** |
 | Diagnosis == `ambiguous` | No automated recovery action. Flag for review (simulated). | **No** |
 | Diagnosis confidence < 0.5 | Treat as `ambiguous` regardless of stated root_cause. | **No** |
-| `retry_attempt_number >= 3` for same billing cycle | Hard STOP — do not retry again this cycle, matches Razorpay's own halt-after-exhaustion behavior. | **No** |
+| `retry_attempt_number >= 3` for same billing cycle | Hard STOP — do not retry again this cycle, matches payment gateway's own halt-after-exhaustion behavior. | **No** |
 | `amount > 15000` AND diagnosis != `afa_required` confirmed | Action restricted to re-auth/step-up flow only, not blind retry. | **No** |
 | Diagnosis == `mandate_expired` | Action restricted to re-authorization link only. Retry action blocked at code level even if LLM proposes it. | **No** |
 | Diagnosis == `insufficient_funds`, confidence >= 0.5 | LLM may choose retry timing within policy-allowed window (e.g., +1 to +5 days). | Timing only, within bounds |
@@ -155,7 +155,7 @@ This layer sits **between** the Recovery Policy Agent's LLM output and actual ex
 
 - **Backend:** FastAPI
 - **Agent orchestration:** LangGraph (LangChain for LLM interface)
-- **LLM:** Llama 3.3 70B Instruct, self-hosted via vLLM, OpenAI-compatible endpoint, native tool-calling enabled (`--enable-auto-tool-choice --tool-call-parser llama3_json`)
+- **LLM:** NVIDIA Nemotron, OpenAI-compatible endpoint, native tool-calling enabled
 - **Frontend:** React + ShadCN + TanStack Query (not Redux)
 - **Data storage:** simple — synthetic dataset as JSON/CSV or lightweight SQLite/Postgres; no need for anything heavier at this scale
 - **Background/async:** none required for MVP; Celery explicitly out of scope (see 4.2)
@@ -202,7 +202,7 @@ This graph runs once per failure record during batch evaluation. Each node's inp
   /api
     main.py                  # FastAPI app
     routes/
-  llm_client.py               # ChatOpenAI pointed at vLLM gateway
+  llm_client.py               # ChatOpenAI pointed at NVIDIA Nemotron gateway
 /frontend
   /src
     /components
@@ -250,7 +250,7 @@ class Diagnosis(BaseModel):
 ### 10.1 What's compared
 
 - **System under test:** two-stage agent (Diagnosis + Policy) with deterministic gate
-- **Baseline:** naive fixed-schedule retry (mirrors Razorpay's documented default: retry next day, shift for holidays, halt after exhaustion — no diagnosis, no differentiation by cause)
+- **Baseline:** naive fixed-schedule retry (mirrors payment gateway's documented default: retry next day, shift for holidays, halt after exhaustion — no diagnosis, no differentiation by cause)
 
 ### 10.2 Metrics (all computed on the full batch, none cherry-picked)
 
@@ -290,17 +290,17 @@ class Diagnosis(BaseModel):
 
 ## 12. Findings from live testing (carry into build — do not re-litigate)
 
-Confirmed via direct testing against the deployed Llama 3.3 70B endpoint:
+Confirmed via direct testing against the deployed NVIDIA Nemotron endpoint:
 
-1. Real Razorpay `payment.failed` webhook payloads can have `error_reason`, `error_source`, `error_step` all `null` — the Diagnosis Agent must handle this as the common case, not the edge case.
-2. Native tool-calling requires `--enable-auto-tool-choice --tool-call-parser llama3_json` on the vLLM launch command — confirmed working after this fix.
+1. Real payment gateway `payment.failed` webhook payloads can have `error_reason`, `error_source`, `error_step` all `null` — the Diagnosis Agent must handle this as the common case, not the edge case.
+2. Native tool-calling requires correct configuration on the launch command — confirmed working after this fix.
 3. Without an explicit reasoning-procedure schema (Section 9's `cause_evaluations` structure), the model would select a `root_cause` it had never evaluated or had already ruled out — a real, reproduced bug, fixed by forcing structured per-cause evaluation.
 4. Even with the fix, the model can still mark a cause `plausible` by elimination rather than genuine positive support in ambiguous cases. This is a known, documented residual limitation — build the self-consistency metric to track it rather than assuming the prompt fully solves it.
 5. Confidence calibration instructions in the system prompt measurably changed model behavior (dropped from an unjustified 0.7 to an honest 0.4-0.5 on weak evidence) — worth keeping and citing as evidence of deliberate calibration work in the pitch.
 
 ---
 
-## 13. Pitch / submission checklist (per Razorpay's own requirements)
+## 13. Pitch / submission checklist (per payment gateway's own requirements)
 
 - [ ] Track: AI Revenue Recovery (Track 03)
 - [ ] Project name

@@ -150,3 +150,17 @@ export function useTriggerBatch() {
     },
   });
 }
+
+export function useSimulate() {
+  return useMutation({
+    mutationFn: async (record: any) => {
+      const res = await fetch(`${API_BASE}/api/simulate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(record),
+      });
+      if (!res.ok) throw new Error('Simulation failed');
+      return res.json() as Promise<AuditEntry>;
+    },
+  });
+}

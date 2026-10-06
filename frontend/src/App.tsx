@@ -6,7 +6,9 @@ import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-do
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import RecoveryQueue from './pages/RecoveryQueue';
 import MetricsPage from './pages/Metrics';
-import { LayoutList, BarChart3 } from 'lucide-react';
+import ExplainPage from './pages/Explain';
+import SimulatePage from './pages/Simulate';
+import { LayoutList, BarChart3, Network, PlayCircle } from 'lucide-react';
 
 const queryClient = new QueryClient();
 
@@ -17,8 +19,8 @@ function AppLayout() {
         <div className="app-header__brand">
           <div className="app-header__logo">R</div>
           <div>
-            <div className="app-header__title">Revenue Recovery AI</div>
-            <div className="app-header__subtitle">Razorpay Buildathon — Track 03</div>
+            <div className="app-header__title">RecoverIQ</div>
+            <div className="app-header__subtitle">AI Revenue Recovery</div>
           </div>
         </div>
         <nav className="app-nav">
@@ -29,7 +31,7 @@ function AppLayout() {
             }
           >
             <LayoutList size={16} />
-            Recovery Queue
+            Queue
           </NavLink>
           <NavLink
             to="/metrics"
@@ -40,12 +42,32 @@ function AppLayout() {
             <BarChart3 size={16} />
             Metrics
           </NavLink>
+          <NavLink
+            to="/explain"
+            className={({ isActive }) =>
+              `app-nav__link ${isActive ? 'app-nav__link--active' : ''}`
+            }
+          >
+            <Network size={16} />
+            Explain
+          </NavLink>
+          <NavLink
+            to="/simulate"
+            className={({ isActive }) =>
+              `app-nav__link ${isActive ? 'app-nav__link--active' : ''}`
+            }
+          >
+            <PlayCircle size={16} />
+            Simulate
+          </NavLink>
         </nav>
       </header>
       <main className="app-main">
         <Routes>
           <Route path="/queue" element={<RecoveryQueue />} />
           <Route path="/metrics" element={<MetricsPage />} />
+          <Route path="/explain" element={<ExplainPage />} />
+          <Route path="/simulate" element={<SimulatePage />} />
           <Route path="*" element={<Navigate to="/queue" replace />} />
         </Routes>
       </main>

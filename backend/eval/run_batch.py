@@ -1,16 +1,9 @@
 """
-Batch evaluation runner — single entrypoint (eval-harness-conventions).
+Batch evaluation runner — single entrypoint.
 
-Must:
-- Load the FULL synthetic dataset (all records, no default subset)
-- Run every record through the LangGraph agent
-- Run every record through the naive baseline
-- Never skip/drop a record on error — catch, log, count in report
-- Save timestamped output to backend/eval/runs/
-
-Per eval-harness-conventions: ground truth (true_root_cause, recoverable,
-amount_recoverable_if_acted_correctly) is stripped before passing to agent,
-only reattached in scoring step.
+Loads the full synthetic dataset, runs every record through both the agent
+pipeline and the baseline, computes metrics, and saves a timestamped report.
+Ground truth is stripped before passing to the agent, only reattached in scoring.
 """
 
 from __future__ import annotations
@@ -37,12 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 def _strip_ground_truth(record: FailureRecord) -> FailureRecordInput:
-    """
-    Strip ground truth fields to create agent-visible input.
-
-    This is the type-level guarantee required by eval-harness-conventions:
-    FailureRecordInput vs FailureRecord ensures the agent never sees ground truth.
-    """
+    """Strip ground truth fields to create agent-visible input."""
     return FailureRecordInput(
         mandate_id=record.mandate_id,
         customer_id=record.customer_id,
@@ -73,28 +61,22 @@ async def run_batch(
     """
     Run full batch evaluation.
 
-    1. Load ALL records from dataset
+    1. Load ALL records
     2. Run each through agent pipeline (with error handling per record)
     3. Run each through baseline
     4. Compute metrics
     5. Save timestamped report
-
-    Returns:
-        Complete metrics report dict
     """
-    # Setup
     if output_dir is None:
         output_dir = Path(__file__).parent / "runs"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Clear override log for fresh batch
     clear_override_log()
 
-    # ── Load dataset (full, no subset) ──
+    # Load dataset
     if dataset_path and dataset_path.exists():
         records = load_dataset(dataset_path)
     else:
-        # Generate if not exists
         default_path = Path(__file__).parent.parent / "data" / "dataset.json"
         if default_path.exists():
             records = load_dataset(default_path)
@@ -106,22 +88,18 @@ async def run_batch(
     n_total = len(records)
     logger.info(f"Loaded {n_total} records for batch evaluation")
 
-    # ── Run agent on every record ──
+    # Run agent on every record
     audit_entries: list[AuditTrailEntry] = []
     errors: list[dict] = []
 
     for i, record in enumerate(records):
         try:
-            # Strip ground truth (eval-harness-conventions: type-level guarantee)
             agent_input = _strip_ground_truth(record)
-
-            # Run full pipeline
             state = await run_agent_pipeline(agent_input, ground_truth=record)
 
             if state.get("audit_entry"):
                 audit_entries.append(state["audit_entry"])
             else:
-                # Create minimal audit entry for errored records
                 audit_entries.append(AuditTrailEntry(
                     mandate_id=record.mandate_id,
                     customer_id=record.customer_id,
@@ -133,7 +111,6 @@ async def run_batch(
                 logger.info(f"Progress: {i + 1}/{n_total} records processed")
 
         except Exception as e:
-            # Never skip/drop — count as errored (eval-harness-conventions rule 1)
             logger.error(f"Record {i} ({record.mandate_id}) failed: {e}")
             errors.append({
                 "index": i,
@@ -149,18 +126,17 @@ async def run_batch(
 
     logger.info(f"Agent pipeline complete: {n_total - len(errors)} succeeded, {len(errors)} errored")
 
-    # ── Run baseline on every record ──
+    # Run baseline
     baseline_results = run_baseline_batch(records)
 
-    # ── Compute metrics ──
+    # Compute metrics
     metrics = compute_metrics(audit_entries, records, baseline_results)
     metrics["errors"] = errors
 
-    # ── Save timestamped report ──
+    # Save report
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     report_path = output_dir / f"batch_report_{timestamp}.json"
 
-    # Build full report with audit entries
     full_report = {
         "metadata": {
             "timestamp": timestamp,
@@ -176,21 +152,17 @@ async def run_batch(
     with open(report_path, "w") as f:
         json.dump(full_report, f, indent=2, default=str)
 
-    # Also save as "latest" for easy frontend access
     latest_path = output_dir / "latest_report.json"
     with open(latest_path, "w") as f:
         json.dump(full_report, f, indent=2, default=str)
 
     logger.info(f"Report saved to {report_path}")
-
-    # ── Console summary ──
     _print_summary(metrics, n_total)
 
     return full_report
 
 
 def _print_summary(metrics: dict, n_total: int) -> None:
-    """Print summary to console."""
     print("\n" + "=" * 60)
     print("  BATCH EVALUATION REPORT")
     print("=" * 60)

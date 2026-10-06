@@ -1,18 +1,9 @@
 """
-Diagnosis Agent Node — LangGraph node for Stage 1.
+Diagnosis Agent — Stage 1 of the recovery pipeline.
 
-Reasons over failure code, timing, mandate status/history, and customer
-payment behavior to produce a structured root-cause diagnosis with a
-confidence score and cited evidence.
-
-Key design decisions (from PRD §9 and §12):
-- Mandatory reasoning procedure: evaluate all 5 causes individually before selecting
-- genuine_decline may only be plausible if a non-null error signal exists
-- Confidence calibration tiers: ≥0.8 requires 2+ independent agreeing signals;
-  <0.5 default for weak/generic evidence
-- Code-level validation: root_cause must be plausible in cause_evaluations or ambiguous
-  (retry once on violation, then flag as ambiguous — PRD §12.3)
-- Confidence < 0.5 forces ambiguous regardless of stated root_cause (PRD §7 row 4)
+Evaluates all 5 possible failure causes individually, then selects the most
+likely root cause with a calibrated confidence score. Includes self-consistency
+validation and a confidence gate.
 """
 
 from __future__ import annotations
@@ -31,10 +22,6 @@ from backend.data.schema import (
 )
 
 logger = logging.getLogger(__name__)
-
-# ──────────────────────────────────────────────
-# System prompt — tested against Llama 3.3 70B (PRD §12)
-# ──────────────────────────────────────────────
 
 DIAGNOSIS_SYSTEM_PROMPT = """You are a payment failure diagnosis agent for an Indian recurring payment (subscription/mandate auto-debit) system.
 
@@ -66,7 +53,7 @@ The 5 causes to evaluate are:
 
 ## NULL ERROR FIELDS
 
-Error fields (error_code, error_reason, error_source, error_step) are frequently ALL null in real Razorpay webhooks (~30-40% of the time). This is NORMAL, not an edge case. When error fields are null:
+Error fields (error_code, error_reason, error_source, error_step) are frequently ALL null (~30-40% of real webhooks). This is NORMAL. When error fields are null:
 - You must still evaluate all 5 causes using secondary signals (mandate_status, amount, customer history, timing)
 - Do NOT default to genuine_decline — it requires positive error signals
 - Lower your confidence appropriately (typically < 0.5 for weak evidence)
@@ -76,7 +63,6 @@ Error fields (error_code, error_reason, error_source, error_step) are frequently
 You must call the `diagnose_failure` tool with your structured diagnosis.
 """
 
-# Tool schema for structured output via native tool-calling
 DIAGNOSIS_TOOL = {
     "type": "function",
     "function": {
@@ -140,9 +126,8 @@ DIAGNOSIS_TOOL = {
 
 
 def _format_record_for_prompt(record: FailureRecordInput) -> str:
-    """Format a failure record as a readable prompt for the LLM."""
+    """Format a failure record as readable key-value pairs for the LLM."""
     data = record.model_dump(mode="json")
-    # Format as key-value pairs for clarity
     lines = ["## Payment Failure Record\n"]
     for key, value in data.items():
         if value is None:
@@ -154,11 +139,9 @@ def _format_record_for_prompt(record: FailureRecordInput) -> str:
 
 def _validate_diagnosis_consistency(diagnosis: Diagnosis) -> bool:
     """
-    Validate that root_cause is self-consistent with cause_evaluations.
-
-    PRD §9: root_cause must equal a cause marked 'plausible' in
-    cause_evaluations, or be 'ambiguous'. This was a confirmed real
-    failure mode during testing (PRD §12.3).
+    Check that root_cause appears as 'plausible' in cause_evaluations,
+    or is 'ambiguous'. Catches the known failure mode where the model
+    selects a cause it never evaluated or already ruled out.
     """
     if diagnosis.root_cause == "ambiguous":
         return True
@@ -194,17 +177,8 @@ async def run_diagnosis(
     """
     Run the Diagnosis Agent on a single failure record.
 
-    Includes:
-    - Structured output via tool-calling
-    - Self-consistency validation (retry once on failure, then flag ambiguous)
-    - Confidence gate (< 0.5 → ambiguous)
-
-    Args:
-        record: The failure record to diagnose (ground truth stripped)
-        max_retries: Max retries on validation failure (default 1 per PRD §9)
-
-    Returns:
-        Validated Diagnosis object
+    Validates self-consistency (retry once on failure, then flag ambiguous)
+    and applies the confidence gate (< 0.5 → ambiguous).
     """
     llm = get_llm(temperature=0.1)
 
@@ -224,7 +198,6 @@ async def run_diagnosis(
         try:
             response = await llm_with_tools.ainvoke(messages)
 
-            # Extract tool call
             if not response.tool_calls:
                 logger.warning(
                     f"Diagnosis attempt {attempt + 1}: No tool call in response. "
@@ -232,7 +205,6 @@ async def run_diagnosis(
                 )
                 if attempt < max_retries:
                     continue
-                # Fallback to ambiguous
                 return _make_ambiguous_fallback(
                     "LLM did not produce a tool call after retries"
                 )
@@ -240,7 +212,7 @@ async def run_diagnosis(
             tool_call = response.tool_calls[0]
             diagnosis = _parse_tool_call_to_diagnosis(tool_call)
 
-            # Validate self-consistency (PRD §9, §12.3)
+            # Self-consistency: root_cause must match a plausible evaluation
             if not _validate_diagnosis_consistency(diagnosis):
                 logger.warning(
                     f"Diagnosis attempt {attempt + 1}: Self-consistency violation — "
@@ -248,7 +220,6 @@ async def run_diagnosis(
                     f"{[ce.cause for ce in diagnosis.cause_evaluations if ce.verdict == 'plausible']}"
                 )
                 if attempt < max_retries:
-                    # Retry with explicit correction message
                     messages.append(response)
                     messages.append(
                         HumanMessage(
@@ -261,17 +232,14 @@ async def run_diagnosis(
                         )
                     )
                     continue
-                # Flag as ambiguous after retry exhaustion
                 logger.warning(
-                    f"Self-consistency validation failed after {max_retries + 1} attempts. "
+                    f"Self-consistency failed after {max_retries + 1} attempts. "
                     f"Flagging as ambiguous."
                 )
                 diagnosis.root_cause = "ambiguous"
                 diagnosis.confidence = min(diagnosis.confidence, 0.3)
 
-            # Confidence gate (PRD §7 row 4): < 0.5 → force ambiguous
-            # Note: this is also enforced in policy_rules.py, but we apply it
-            # here too for clean data flow
+            # Confidence gate: < 0.5 → force ambiguous
             if diagnosis.confidence < 0.5 and diagnosis.root_cause != "ambiguous":
                 logger.info(
                     f"Confidence gate: {diagnosis.confidence:.2f} < 0.5, "
@@ -287,7 +255,6 @@ async def run_diagnosis(
                 continue
             return _make_ambiguous_fallback(f"LLM error after retries: {e}")
 
-    # Should not reach here, but safety fallback
     return _make_ambiguous_fallback("Exhausted all attempts")
 
 

@@ -6,12 +6,13 @@
  * Confidence calibration chart.
  */
 
-import { useMetrics } from '../api/hooks';
+import React from 'react';
+import { useMetrics, useRecords } from '../api/hooks';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   LineChart, Line, Legend, Cell, PieChart, Pie,
 } from 'recharts';
-import { TrendingUp, TrendingDown, Shield, AlertTriangle, CheckCircle, Activity } from 'lucide-react';
+import { TrendingUp, TrendingDown, Shield, AlertTriangle, CheckCircle, Activity, Grid } from 'lucide-react';
 
 function formatCurrency(amount: number) {
   if (amount >= 100000) {
@@ -107,6 +108,42 @@ export default function MetricsPage() {
       fill: CAUSE_COLORS[cause] || CHART_COLORS.muted,
     })
   );
+
+  const { data: recordsData } = useRecords();
+  const records = recordsData?.records || [];
+  
+  // Risk Heatmap computation
+  const amountBands = ['< ₹500', '₹500 - ₹2000', '> ₹2000'];
+  const mandateTypes = ['upi_autopay', 'card_emandate', 'nach'];
+  
+  const heatmapData = amountBands.map(band => {
+    return mandateTypes.map(type => {
+      const cellRecords = records.filter(r => {
+        const amt = r.amount;
+        const matchesBand = band === '< ₹500' ? amt < 500 : band === '₹500 - ₹2000' ? (amt >= 500 && amt <= 2000) : amt > 2000;
+        // The type comes from ground truth if available, otherwise default to active for visual purposes since we stripped it from input in some places, but let's just use customer_id prefix or something if mandate_type isn't there, wait, mandate_type is in AuditEntry? No, it's not. 
+        // AuditEntry doesn't have mandate_type. Let's use Diagnosis Root Cause instead of Mandate Type for the columns.
+        return matchesBand; 
+      });
+      return 0; // We'll rewrite the heatmap logic to use diagnosis root causes
+    });
+  });
+
+  const rootCauses = ['insufficient_funds', 'customer_cancelled', 'genuine_decline'];
+  const heatmap = amountBands.map(band => {
+    return rootCauses.map(cause => {
+      const cellRecords = records.filter(r => {
+        const amt = r.amount;
+        const matchesBand = band === '< ₹500' ? amt < 500 : band === '₹500 - ₹2000' ? (amt >= 500 && amt <= 2000) : amt > 2000;
+        const matchesCause = r.diagnosis?.root_cause === cause;
+        return matchesBand && matchesCause;
+      });
+      const recoveredCount = cellRecords.filter(r => r.amount_recovered > 0).length;
+      const total = cellRecords.length;
+      const rate = total > 0 ? recoveredCount / total : 0;
+      return { band, cause, rate, total };
+    });
+  });
 
   const improvementPct = m.baseline_recovery_rate_pct > 0
     ? ((m.system_recovery_rate_pct - m.baseline_recovery_rate_pct) / m.baseline_recovery_rate_pct * 100).toFixed(1)
@@ -439,6 +476,69 @@ export default function MetricsPage() {
               })}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      {/* ─── Risk Heatmap ─── */}
+      <div className="card" style={{ marginBottom: '1.5rem' }}>
+        <div className="card__header">
+          <div>
+            <div className="card__title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Grid size={18} /> Recovery Probability Heatmap
+            </div>
+            <div className="card__subtitle">Predicted recovery rate by amount band and root cause</div>
+          </div>
+        </div>
+        
+        <div style={{ display: 'grid', gridTemplateColumns: `120px repeat(${rootCauses.length}, 1fr)`, gap: '4px', marginTop: '1rem' }}>
+          {/* Header row */}
+          <div></div>
+          {rootCauses.map(cause => (
+            <div key={cause} style={{ textAlign: 'center', fontSize: '0.8rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 600 }}>
+              {cause.replace(/_/g, ' ')}
+            </div>
+          ))}
+          
+          {/* Grid rows */}
+          {heatmap.map((row, i) => (
+            <React.Fragment key={amountBands[i]}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: '1rem', fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                {amountBands[i]}
+              </div>
+              {row.map((cell, j) => {
+                // Calculate color intensity based on rate (0 to 1). 
+                // Low rate (high risk) = red, High rate = green.
+                const hue = cell.rate * 120; // 0 = red, 120 = green
+                const alpha = cell.total > 0 ? 0.8 : 0.1;
+                const bgColor = `hsla(${hue}, 70%, 40%, ${alpha})`;
+                
+                return (
+                  <div key={`${i}-${j}`} style={{ 
+                    background: bgColor, 
+                    height: '80px', 
+                    borderRadius: 'var(--radius-sm)', 
+                    display: 'flex', 
+                    flexDirection: 'column',
+                    alignItems: 'center', 
+                    justifyContent: 'center',
+                    border: '1px solid rgba(255,255,255,0.05)',
+                    transition: 'transform 0.2s',
+                    cursor: 'default'
+                  }}
+                  title={`${cell.total} cases`}>
+                    {cell.total > 0 ? (
+                      <>
+                        <div style={{ fontWeight: 700, color: 'white', fontSize: '1.1rem' }}>{(cell.rate * 100).toFixed(0)}%</div>
+                        <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.7)' }}>n={cell.total}</div>
+                      </>
+                    ) : (
+                      <span style={{ color: 'var(--text-muted)' }}>-</span>
+                    )}
+                  </div>
+                );
+              })}
+            </React.Fragment>
+          ))}
         </div>
       </div>
     </div>

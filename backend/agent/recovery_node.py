@@ -1,11 +1,8 @@
 """
-Recovery Policy Agent Node — LangGraph node for Stage 2.
+Recovery Policy Agent — Stage 2 of the pipeline.
 
 Takes the diagnosis and selects the action with the best expected recovery
-value, bounded by the deterministic policy layer.
-
-The LLM proposes an action; validate_action() is the ONLY thing that can
-authorize execution (policy-layer-guard skill rule 4).
+value. The proposed action MUST go through validate_action() before execution.
 """
 
 from __future__ import annotations
@@ -134,14 +131,8 @@ async def run_recovery_agent(
     diagnosis: Diagnosis,
 ) -> ProposedAction:
     """
-    Run the Recovery Policy Agent to propose an action.
-
-    This LLM call proposes an action — it does NOT execute it.
-    The proposed action MUST go through validate_action() before execution
-    (policy-layer-guard skill rule 4).
-
-    Returns:
-        ProposedAction — the LLM's proposed action (not yet validated).
+    Run the Recovery Agent to propose an action.
+    This is a PROPOSAL — it does NOT execute. Must go through validate_action().
     """
     llm = get_llm(temperature=0.1)
 
@@ -181,10 +172,7 @@ async def run_recovery_agent(
 
 
 def _make_default_proposal(diagnosis: Diagnosis) -> ProposedAction:
-    """
-    Create a sensible default proposal when the LLM fails.
-    This still goes through validate_action() — it's a proposal, not execution.
-    """
+    """Sensible default proposal when the LLM fails. Still goes through validate_action()."""
     action_map = {
         "insufficient_funds": ("retry", 2),
         "mandate_expired": ("send_reauth_link", None),
@@ -198,6 +186,6 @@ def _make_default_proposal(diagnosis: Diagnosis) -> ProposedAction:
 
     return ProposedAction(
         action=action,
-        reasoning=f"Default proposal based on diagnosis root_cause={diagnosis.root_cause} (LLM fallback)",
+        reasoning=f"Default proposal for root_cause={diagnosis.root_cause} (LLM fallback)",
         retry_delay_days=delay,
     )

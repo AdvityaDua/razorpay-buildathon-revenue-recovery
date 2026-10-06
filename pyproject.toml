@@ -1,7 +1,7 @@
 [project]
-name = "razorpay-buildathon"
+name = "recoveriq"
 version = "0.1.0"
-description = "AI Recurring Revenue Recovery Orchestrator — Razorpay Buildathon Track 03"
+description = "RecoverIQ — AI Recurring Revenue Recovery Orchestrator"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

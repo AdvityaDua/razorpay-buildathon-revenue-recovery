@@ -1,18 +1,16 @@
-# 🔄 AI Recurring Revenue Recovery Orchestrator
+# 🔄 RecoverIQ — AI Recurring Revenue Recovery Orchestrator
 
-> **Razorpay Buildathon 2026 — Track 03: AI Revenue Recovery**
-
-An AI-powered agent system that intelligently diagnoses why recurring payments fail and selects compliant recovery actions — replacing blind retry logic with evidence-based, policy-gated decision-making. Built in 5 days for the Razorpay Buildathon.
+An AI-powered agent system that intelligently diagnoses why recurring payments fail and selects compliant recovery actions — replacing blind retry logic with evidence-based, policy-gated decision-making.
 
 ---
 
 ## 🎯 Problem
 
-Every subscription business on Razorpay relies on auto-debit mandates succeeding every billing cycle. When a payment fails, the failure code alone rarely explains why — it could be insufficient funds, an expired mandate, a missed step-up authentication, a bank decline, or the customer deliberately cancelling.
+Every subscription business relying on auto-debit mandates needs every billing cycle to succeed. When a payment fails, the failure code alone rarely explains why — it could be insufficient funds, an expired mandate, a missed step-up authentication, a bank decline, or the customer deliberately cancelling.
 
 **The naive approach** (retry N times on a fixed schedule) is:
 - **Inefficient**: wastes retries on non-recoverable cases
-- **Non-compliant**: retries cancelled mandates, violating RBI mandate revocation rules
+- **Non-compliant**: retries cancelled mandates, violating mandate revocation rules
 - **Revenue-losing**: misses cases needing specific interventions (re-auth links, step-up auth, alternate payment prompts)
 
 ## 💡 Solution
@@ -63,7 +61,7 @@ Failed Payment → Diagnosis Agent (LLM) → Confidence Gate → Policy Layer (C
 | Metric | Value |
 |---|---|
 | **Total Records** | 400 |
-| **Null Error Fields** | 37.8% (mirrors real Razorpay webhook behavior) |
+| **Null Error Fields** | 37.8% (mirrors real-world webhook behavior) |
 | **Recoverable Cases** | 243/400 (60.8%) |
 | **Total Recoverable Revenue** | ₹29,62,528 |
 
@@ -154,7 +152,7 @@ Failed Payment → Diagnosis Agent (LLM) → Confidence Gate → Policy Layer (C
 |---|---|
 | **Backend** | FastAPI (Python) |
 | **Agent Orchestration** | LangGraph + LangChain |
-| **LLM** | Llama 3.3 70B Instruct (self-hosted vLLM, OpenAI-compatible) |
+| **LLM** | NVIDIA Nemotron (OpenAI-compatible) |
 | **Frontend** | React + TypeScript + TanStack Query + Recharts |
 | **Data** | Synthetic JSON (400 records) + Pydantic schemas |
 
@@ -185,7 +183,7 @@ The **deterministic policy layer** is the core product thesis. It is pure code (
 │   │   ├── policy_rules.py        # Deterministic policy layer (9 rules, pure code)
 │   │   ├── recovery_node.py       # Stage 2: LLM recovery action selection
 │   │   ├── graph.py               # LangGraph pipeline orchestration
-│   │   └── llm_client.py          # ChatOpenAI → vLLM endpoint
+│   │   └── llm_client.py          # ChatOpenAI → NVIDIA Nemotron endpoint
 │   ├── data/
 │   │   ├── schema.py              # Pydantic models (12 classes)
 │   │   ├── generate_synthetic.py  # Synthetic data generator (400 records)
@@ -209,7 +207,7 @@ The **deterministic policy layer** is the core product thesis. It is pure code (
 │       └── main.tsx
 ├── docs/
 │   └── PRD.md                     # Full product requirements document
-└── .env                           # vLLM endpoint configuration
+└── .env                           # LLM endpoint configuration
 ```
 
 ---
@@ -220,20 +218,20 @@ The **deterministic policy layer** is the core product thesis. It is pure code (
 
 - Python 3.12+
 - Node.js 18+
-- Access to a vLLM endpoint running Llama 3.3 70B (or any OpenAI-compatible LLM)
+- Access to a NVIDIA Nemotron endpoint (or any OpenAI-compatible LLM)
 
 ### Setup
 
 ```bash
 # 1. Clone & install Python dependencies
 git clone <repo-url>
-cd razorpay-buildathon
+cd recoveriq
 
 pip install fastapi uvicorn python-dotenv pydantic langchain langchain-openai langgraph httpx
 
 # 2. Configure LLM endpoint
 cp .env.example .env
-# Edit .env with your vLLM endpoint URL
+# Edit .env with your NVIDIA Nemotron endpoint URL
 
 # 3. Generate synthetic dataset
 PYTHONPATH=. python -m backend.data.generate_synthetic
@@ -266,7 +264,7 @@ PYTHONPATH=. python tests/test_all.py
 ## 🧠 Key Technical Decisions
 
 ### 1. Structured Output via Native Tool-Calling
-The Diagnosis Agent uses Llama 3.3's native tool-calling (not regex parsing) to produce structured `Diagnosis` objects. This was validated against the deployed model — it requires `--enable-auto-tool-choice --tool-call-parser llama3_json` on vLLM launch.
+The Diagnosis Agent uses NVIDIA Nemotron's native tool-calling (not regex parsing) to produce structured `Diagnosis` objects. This was validated against the deployed model.
 
 ### 2. Self-Consistency Validation
 A confirmed bug during testing: the model would select a `root_cause` it never evaluated or already ruled out. Fixed with a **code-level validation** — `root_cause` must appear in `cause_evaluations` as `plausible`, with a retry-once-then-flag-as-ambiguous fallback.
@@ -291,10 +289,10 @@ The policy override count is a **reported metric**, not a bug. A high count prov
 
 | Finding | Impact | Fix |
 |---|---|---|
-| Real Razorpay webhooks have `error_reason`, `error_source`, `error_step` all `null` ~30-40% of the time | Diagnosis Agent must treat null errors as the **common case**, not edge case | Generate 37.8% null-error records; prompt explicitly handles null fields |
+| Real-world payment webhooks have `error_reason`, `error_source`, `error_step` all `null` ~30-40% of the time | Diagnosis Agent must treat null errors as the **common case**, not edge case | Generate 37.8% null-error records; prompt explicitly handles null fields |
 | Model selects root causes it never evaluated | Silent misdiagnosis → wrong recovery action | Code-level self-consistency validation with retry + ambiguous fallback |
 | Model overconfident on weak evidence (0.7+ on null-error cases) | False sense of diagnosis certainty | Explicit confidence calibration tiers in system prompt; `< 0.5` auto-routes to HOLD |
-| vLLM tool-calling requires specific flags | Tool calls silently fail without them | `--enable-auto-tool-choice --tool-call-parser llama3_json` on launch |
+| Tool-calling requires specific flags | Tool calls silently fail without them | Set correct configuration on launch |
 
 ---
 
@@ -304,7 +302,7 @@ The policy override count is a **reported metric**, not a bug. A high count prov
 
 - All metrics computed on the **full 400-record batch** — no subset selection
 - Every record processed or explicitly counted as errored (never silently dropped)
-- Compared against a **naive fixed-schedule retry baseline** mirroring Razorpay's documented default behavior
+- Compared against a **naive fixed-schedule retry baseline** mirroring standard auto-debit retry behavior
 - Results saved as timestamped JSON reports for reproducibility
 
 ### Metrics Computed (PRD §10.2)
@@ -328,10 +326,10 @@ The policy override count is a **reported metric**, not a bug. A high count prov
 2. **Evidence-based**: Every diagnosis cites specific fields; every action has a reasoning chain
 3. **Honestly evaluated**: Full batch metrics with a real baseline — not a cherry-picked demo
 4. **Auditable**: Complete trail from evidence → diagnosis → confidence → policy check → action → outcome
-5. **Practically deployable**: Designed as an intelligence layer *on top of* Razorpay's existing infrastructure, not a replacement
+5. **Platform-agnostic**: Designed as an intelligence layer on top of existing payment infrastructure, not a replacement
 
 ---
 
 ## 📝 License
 
-Built for the Razorpay Buildathon 2026. Not for production use — synthetic data only.
+This project uses synthetic data only and is not intended for production use.

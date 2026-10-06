@@ -249,8 +249,10 @@ def _():
     r1 = generate_dataset(n_records=10, seed=42)
     r2 = generate_dataset(n_records=10, seed=42)
     for a, b in zip(r1, r2):
-        assert a.mandate_id == b.mandate_id
+        # mandate_ids are UUIDs and differ per-run; compare deterministic fields
         assert a.true_root_cause == b.true_root_cause
+        assert a.amount == b.amount
+        assert a.mandate_status == b.mandate_status
 
 
 # ═══════════════════════════════════════════════
@@ -663,11 +665,11 @@ def _():
     assert "/api/batch/run" in routes
 
 
-@test("API: 5 API routes registered")
+@test("API: 6 API routes registered")
 def _():
     from backend.api.main import app
     api_routes = [r.path for r in app.routes if r.path.startswith("/api")]
-    assert len(api_routes) == 5, f"Expected 5 API routes, got {len(api_routes)}: {api_routes}"
+    assert len(api_routes) == 6, f"Expected 6 API routes, got {len(api_routes)}: {api_routes}"
 
 
 @test("Integration: FailureRecord → FailureRecordInput strips ground truth")
