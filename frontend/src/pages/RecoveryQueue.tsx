@@ -9,7 +9,7 @@
 
 import { useState, useMemo } from 'react';
 import { useRecords, type AuditEntry } from '../api/hooks';
-import { ChevronDown, ChevronRight, AlertTriangle, CheckCircle, XCircle, Clock, Shield, Search } from 'lucide-react';
+import { ChevronDown, ChevronRight, Shield, Search } from 'lucide-react';
 
 const ROOT_CAUSE_LABELS: Record<string, string> = {
   insufficient_funds: 'Insufficient Funds',

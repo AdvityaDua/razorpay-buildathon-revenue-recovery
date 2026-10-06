@@ -4,7 +4,7 @@
  */
 
 import { useState } from 'react';
-import { useSimulate, type AuditEntry } from '../api/hooks';
+import { useSimulate } from '../api/hooks';
 import { PlayCircle, Settings2, Activity, CheckCircle, AlertTriangle } from 'lucide-react';
 
 const DEFAULT_RECORD = {

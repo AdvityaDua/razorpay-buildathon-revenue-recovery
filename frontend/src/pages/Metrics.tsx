@@ -12,7 +12,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   LineChart, Line, Legend, Cell, PieChart, Pie,
 } from 'recharts';
-import { TrendingUp, TrendingDown, Shield, AlertTriangle, CheckCircle, Activity, Grid } from 'lucide-react';
+import { TrendingUp, Shield, AlertTriangle, CheckCircle, Activity, Grid } from 'lucide-react';
 
 function formatCurrency(amount: number) {
   if (amount >= 100000) {
@@ -114,21 +114,6 @@ export default function MetricsPage() {
   
   // Risk Heatmap computation
   const amountBands = ['< ₹500', '₹500 - ₹2000', '> ₹2000'];
-  const mandateTypes = ['upi_autopay', 'card_emandate', 'nach'];
-  
-  const heatmapData = amountBands.map(band => {
-    return mandateTypes.map(type => {
-      const cellRecords = records.filter(r => {
-        const amt = r.amount;
-        const matchesBand = band === '< ₹500' ? amt < 500 : band === '₹500 - ₹2000' ? (amt >= 500 && amt <= 2000) : amt > 2000;
-        // The type comes from ground truth if available, otherwise default to active for visual purposes since we stripped it from input in some places, but let's just use customer_id prefix or something if mandate_type isn't there, wait, mandate_type is in AuditEntry? No, it's not. 
-        // AuditEntry doesn't have mandate_type. Let's use Diagnosis Root Cause instead of Mandate Type for the columns.
-        return matchesBand; 
-      });
-      return 0; // We'll rewrite the heatmap logic to use diagnosis root causes
-    });
-  });
-
   const rootCauses = ['insufficient_funds', 'customer_cancelled', 'genuine_decline'];
   const heatmap = amountBands.map(band => {
     return rootCauses.map(cause => {
@@ -280,7 +265,7 @@ export default function MetricsPage() {
                     color: '#e8e8f0',
                     fontSize: '12px',
                   }}
-                  formatter={(value: number) => [formatCurrencyFull(value), 'Amount']}
+                  formatter={(value: any) => [formatCurrencyFull(Number(value)), 'Amount']}
                 />
                 <Bar dataKey="value" radius={[0, 6, 6, 0]}>
                   {recoveryComparisonData.map((entry, index) => (

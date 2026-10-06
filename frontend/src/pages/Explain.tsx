@@ -6,9 +6,8 @@
  */
 
 import { useState } from 'react';
-import { useRecords, type AuditEntry } from '../api/hooks';
-import { Network, Search, AlertCircle, CheckCircle, XCircle, Shield, PlayCircle } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useRecords } from '../api/hooks';
+import { Search, Shield } from 'lucide-react';
 
 function DecisionNode({ title, value, type, children }: any) {
   const getColors = () => {
